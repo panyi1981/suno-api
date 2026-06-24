@@ -18,7 +18,7 @@ const cache = globalForSunoApi.sunoApiCache || new Map<string, SunoApi>();
 globalForSunoApi.sunoApiCache = cache;
 
 const logger = pino();
-export const DEFAULT_MODEL = 'chirp-v3-5';
+export const DEFAULT_MODEL = 'chirp-auk-turbo';
 
 export interface AudioInfo {
   id: string; // Unique identifier for the audio
@@ -232,7 +232,7 @@ class SunoApi {
       if (isPage(target))
         return target.mouse.click(position?.x ?? 0, position?.y ?? 0);
       else
-        return target.click({ force: true, position });
+        return target.click({ force: true, position, timeout: 60000 });
     }
   }
 
@@ -250,6 +250,195 @@ class SunoApi {
         return webkit;*/
       default:
         return chromium;
+    }
+  }
+
+  private getHcaptchaFrame(page: Page) {
+    return page.frameLocator(
+      'iframe[title*="hCaptcha challenge"], iframe[src*="frame=challenge"], iframe[src*="hcaptcha-assets"], iframe[src*="hcaptcha"]'
+    );
+  }
+
+  private async isHcaptchaChallengeVisible(page: Page): Promise<boolean> {
+    const challengeIframe = page.locator(
+      'iframe[title*="hCaptcha challenge"], iframe[src*="frame=challenge"], iframe[src*="hcaptcha-assets"]'
+    );
+    if (await challengeIframe.count() > 0 && await challengeIframe.first().isVisible().catch(() => false)) {
+      return true;
+    }
+
+    const frame = this.getHcaptchaFrame(page);
+    const challenge = frame.locator('.challenge-container, .challenge-view, .task-grid');
+    if (await challenge.count() === 0)
+      return false;
+    return challenge.first().isVisible().catch(() => false);
+  }
+
+  private async waitForHcaptchaChallenge(page: Page, timeout = 120000): Promise<void> {
+    const deadline = Date.now() + timeout;
+    while (Date.now() < deadline) {
+      if (await this.isHcaptchaChallengeVisible(page)) {
+        logger.info('hCaptcha challenge is visible');
+        return;
+      }
+      const hcaptchaFrame = page.frames().find((frame: { url: () => string }) =>
+        /hcaptcha|frame=challenge|captcha\/v1/i.test(frame.url())
+      );
+      if (hcaptchaFrame) {
+        const hasChallenge = await hcaptchaFrame.locator('.challenge-container, .challenge-view, .task-grid').count().catch(() => 0);
+        if (hasChallenge > 0) {
+          logger.info('hCaptcha frame detected');
+          return;
+        }
+        if (/frame=challenge/i.test(hcaptchaFrame.url())) {
+          logger.info('hCaptcha challenge iframe detected');
+          return;
+        }
+      }
+      await sleep(1);
+    }
+    throw new Error(`hCaptcha challenge did not appear within ${Math.round(timeout / 1000)} seconds`);
+  }
+
+  private async prepareCreatePage(page: Page): Promise<void> {
+    const simpleTab = page.getByRole('tab', { name: /^simple$/i });
+    if (await simpleTab.count() > 0 && await simpleTab.isVisible().catch(() => false))
+      await simpleTab.click().catch(() => undefined);
+
+    for (const label of ['Close', 'Accept All', 'Accept all', 'Reject All']) {
+      try {
+        await page.getByRole('button', { name: label }).click({ timeout: 1500 });
+      } catch {}
+    }
+  }
+
+  private async triggerCaptcha(page: Page, textarea: Locator, button: Locator): Promise<void> {
+    const prompt = 'A popular heavy metal song about war';
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      logger.info(`CAPTCHA trigger attempt ${attempt}/3`);
+      await this.click(textarea);
+      await textarea.fill('').catch(() => undefined);
+      await textarea.fill(prompt).catch(async () => {
+        await textarea.pressSequentially(prompt, { delay: 40 });
+      });
+      await sleep(0.5);
+
+      const enabled = await button.isEnabled().catch(() => false);
+      if (!enabled) {
+        logger.info('Create song button still disabled after filling prompt');
+        await this.saveCaptchaDebugScreenshot(page, `create-disabled-${attempt}`);
+        continue;
+      }
+
+      await this.click(button);
+      try {
+        await this.waitForHcaptchaChallenge(page, 45000);
+        return;
+      } catch (err: any) {
+        logger.info(err.message);
+        await this.saveCaptchaDebugScreenshot(page, `hcaptcha-missing-${attempt}`);
+      }
+    }
+    throw new Error('hCaptcha did not appear after clicking Create song. Check CAPTCHA_DEBUG_SCREENSHOT in /tmp and refresh SUNO_COOKIE.');
+  }
+
+  private async waitForHcaptchaReady(page: Page, signal: AbortSignal): Promise<void> {
+    await this.waitForHcaptchaChallenge(page, 120000);
+    try {
+      await waitForRequests(page, signal, 30000);
+    } catch (err: any) {
+      if (await this.isHcaptchaChallengeVisible(page)) {
+        logger.info('hCaptcha challenge visible without image requests; continuing');
+        return;
+      }
+      throw err;
+    }
+  }
+
+  private buildBrowserCookies() {
+    const lax: 'Lax' | 'Strict' | 'None' = 'Lax';
+    const secure = true;
+    const cookies: Array<{
+      name: string;
+      value: string;
+      domain: string;
+      path: string;
+      sameSite: typeof lax;
+      secure: boolean;
+    }> = [];
+    const seen = new Set<string>();
+
+    const addCookie = (name: string, value: string, domain: string) => {
+      const key = `${domain}|${name}`;
+      if (!value || seen.has(key))
+        return;
+      seen.add(key);
+      cookies.push({ name, value, domain, path: '/', sameSite: lax, secure });
+    };
+
+    addCookie('__session', this.currentToken + '', '.suno.com');
+
+    for (const [name, rawValue] of Object.entries(this.cookies)) {
+      const value = rawValue + '';
+      if (!value)
+        continue;
+      addCookie(name, value, '.suno.com');
+      if (name.startsWith('__') || name.includes('clerk'))
+        addCookie(name, value, 'auth.suno.com');
+    }
+
+    return cookies;
+  }
+
+  private async waitForFirstVisible(page: Page, locators: Locator[], label: string, timeout = 60000): Promise<Locator> {
+    const deadline = Date.now() + timeout;
+    while (Date.now() < deadline) {
+      for (const locator of locators) {
+        const candidate = locator.first();
+        if (await candidate.count() > 0 && await candidate.isVisible().catch(() => false))
+          return candidate;
+      }
+      await sleep(0.5);
+    }
+    throw new Error(`Could not find ${label} on Suno create page (${page.url()})`);
+  }
+
+  private async findCreatePromptInput(page: Page): Promise<Locator> {
+    return this.waitForFirstVisible(page, [
+      page.locator('textarea[placeholder*="Mellow folk metal"]'),
+      page.locator('textarea[placeholder*="song about"]'),
+      page.getByRole('textbox', { name: /folk metal|song about|tree outside/i }),
+      page.getByPlaceholder(/folk metal|song about|describe the sound/i),
+      page.locator('.custom-textarea'),
+      page.locator('textarea:not([name="g-recaptcha-response"]):not([name="h-captcha-response"])'),
+    ], 'song description input');
+  }
+
+  private async findCreateButton(page: Page): Promise<Locator> {
+    return this.waitForFirstVisible(page, [
+      page.getByRole('button', { name: /create song/i }),
+      page.locator('button[aria-label="Create song"]'),
+      page.locator('button[aria-label="Create song"]:not([disabled])'),
+      page.getByRole('button', { name: /^create$/i }),
+      page.locator('button[aria-label="Create"]'),
+    ], 'Create song button');
+  }
+
+  private async saveCaptchaDebugScreenshot(page: Page, name: string): Promise<void> {
+    if (!yn(process.env.CAPTCHA_DEBUG_SCREENSHOT, { default: false }))
+      return;
+    const filePath = path.join('/tmp', `suno-captcha-${name}-${Date.now()}.png`);
+    await page.screenshot({ path: filePath, fullPage: true }).catch(() => undefined);
+    logger.info(`Saved CAPTCHA debug screenshot: ${filePath}`);
+  }
+
+  private async assertCreatePageLoaded(page: Page): Promise<void> {
+    const url = page.url();
+    if (/sign-in|accounts\.suno\.com|login/i.test(url)) {
+      await this.saveCaptchaDebugScreenshot(page, 'sign-in');
+      throw new Error(
+        `Browser redirected to sign-in (${url}). Refresh SUNO_COOKIE from suno.com/create while logged in.`
+      );
     }
   }
 
@@ -278,25 +467,7 @@ class SunoApi {
       headless: yn(process.env.BROWSER_HEADLESS, { default: true })
     });
     const context = await browser.newContext({ userAgent: this.userAgent, locale: process.env.BROWSER_LOCALE, viewport: null });
-    const cookies = [];
-    const lax: 'Lax' | 'Strict' | 'None' = 'Lax';
-    cookies.push({
-      name: '__session',
-      value: this.currentToken+'',
-      domain: '.suno.com',
-      path: '/',
-      sameSite: lax
-    });
-    for (const key in this.cookies) {
-      cookies.push({
-        name: key,
-        value: this.cookies[key]+'',
-        domain: '.suno.com',
-        path: '/',
-        sameSite: lax
-      })
-    }
-    await context.addCookies(cookies);
+    await context.addCookies(this.buildBrowserCookies());
     return context;
   }
 
@@ -309,39 +480,46 @@ class SunoApi {
       return null;
 
     logger.info('CAPTCHA required. Launching browser...')
+    await this.keepAlive(true);
     const browser = await this.launchBrowser();
     const page = await browser.newPage();
-    await page.goto('https://suno.com/create', { referer: 'https://www.google.com/', waitUntil: 'domcontentloaded', timeout: 0 });
+    page.setDefaultTimeout(60000);
+    await page.goto('https://suno.com/create', { referer: 'https://www.google.com/', waitUntil: 'domcontentloaded', timeout: 60000 });
 
     logger.info('Waiting for Suno interface to load');
-    // await page.locator('.react-aria-GridList').waitFor({ timeout: 60000 });
-    await page.waitForResponse('**/api/project/**\\?**', { timeout: 60000 }); // wait for song list API call
+    await this.assertCreatePageLoaded(page);
+    await page.waitForResponse('**/api/project/**\\?**', { timeout: 60000 }).catch(() => {
+      logger.info('Song list API not observed; continuing with UI selectors');
+    });
+    await this.assertCreatePageLoaded(page);
 
     if (this.ghostCursorEnabled)
       this.cursor = await createCursor(page);
     
     logger.info('Triggering the CAPTCHA');
+    await this.prepareCreatePage(page);
+
+    let textarea: Locator;
+    let button: Locator;
     try {
-      await page.getByLabel('Close').click({ timeout: 2000 }); // close all popups
-      // await this.click(page, { x: 318, y: 13 });
-    } catch(e) {}
-
-    const textarea = page.locator('.custom-textarea');
-    await this.click(textarea);
-    await textarea.pressSequentially('Lorem ipsum', { delay: 80 });
-
-    const button = page.locator('button[aria-label="Create"]').locator('div.flex');
-    this.click(button);
+      textarea = await this.findCreatePromptInput(page);
+      button = await this.findCreateButton(page);
+      await this.triggerCaptcha(page, textarea, button);
+    } catch (err) {
+      await this.saveCaptchaDebugScreenshot(page, 'trigger-failed');
+      throw err;
+    }
 
     const controller = new AbortController();
+    const hcaptchaFrame = this.getHcaptchaFrame(page);
     new Promise<void>(async (resolve, reject) => {
-      const frame = page.frameLocator('iframe[title*="hCaptcha"]');
-      const challenge = frame.locator('.challenge-container');
+      const frame = hcaptchaFrame;
+      const challenge = frame.locator('.challenge-container, .challenge-view, .task-grid');
       try {
         let wait = true;
         while (true) {
           if (wait)
-            await waitForRequests(page, controller.signal);
+            await this.waitForHcaptchaReady(page, controller.signal);
           const drag = (await challenge.locator('.prompt-text').first().innerText()).toLowerCase().includes('drag');
           let captcha: any;
           for (let j = 0; j < 3; j++) { // try several times because sometimes 2Captcha could return an error

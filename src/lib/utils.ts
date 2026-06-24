@@ -30,14 +30,15 @@ export const isPage = (target: any): target is Page => {
 }
 
 /**
- * Waits for an hCaptcha image requests and then waits for all of them to end
+ * Waits for hCaptcha image/challenge network activity to settle.
  * @param page
- * @param signal `const controller = new AbortController(); controller.status`
- * @returns {Promise<void>} 
+ * @param signal `const controller = new AbortController(); controller.abort()`
+ * @param waitMs Max time to wait for the first matching request
  */
-export const waitForRequests = (page: Page, signal: AbortSignal): Promise<void> => {
+export const waitForRequests = (page: Page, signal: AbortSignal, waitMs = 120000): Promise<void> => {
   return new Promise((resolve, reject) => {
-    const urlPattern = /^https:\/\/img[a-zA-Z0-9]*\.hcaptcha\.com\/.*$/;
+    // Suno proxies hCaptcha via hcaptcha-*-prod.suno.com, not only hcaptcha.com
+    const urlPattern = /hcaptcha/i;
     let timeoutHandle: NodeJS.Timeout | null = null;
     let activeRequestCount = 0;
     let requestOccurred = false;
@@ -55,7 +56,7 @@ export const waitForRequests = (page: Page, signal: AbortSignal): Promise<void> 
         timeoutHandle = setTimeout(() => {
           cleanupListeners();
           resolve();
-        }, 1000); // 1 second of no requests
+        }, 1000);
       }
     };
 
@@ -75,23 +76,20 @@ export const waitForRequests = (page: Page, signal: AbortSignal): Promise<void> 
       }
     };
 
-    // Wait for an hCaptcha request for up to 1 minute
     const initialTimeout = setTimeout(() => {
       if (!requestOccurred) {
         page.off('request', onRequest);
         cleanupListeners();
-        reject(new Error('No hCaptcha request occurred within 1 minute.'));
+        reject(new Error(`No hCaptcha request occurred within ${Math.round(waitMs / 1000)} seconds.`));
       } else {
-        // Start waiting for no hCaptcha requests
         resetTimeout();
       }
-    }, 60000); // 1 minute timeout
+    }, waitMs);
 
     page.on('request', onRequest);
     page.on('requestfinished', onRequestFinished);
     page.on('requestfailed', onRequestFinished);
 
-    // Cleanup the initial timeout if an hCaptcha request occurs
     page.on('request', (request: { url: () => string }) => {
       if (urlPattern.test(request.url())) {
         clearTimeout(initialTimeout);

@@ -5,450 +5,334 @@
     "description": "Use API to call the music generation service of Suno.ai and easily integrate it into agents like GPTs.",
     "version": "1.1.0"
   },
+  "servers": [
+    { "url": "http://localhost:3021", "description": "Local development" },
+    { "url": "https://sunoapi.aicreate.cc", "description": "Production" }
+  ],
   "tags": [
     {
-      "name": "default"
+      "name": "Music Generation",
+      "description": "Generate and extend music tracks"
+    },
+    {
+      "name": "Lyrics",
+      "description": "Lyrics generation and alignment"
+    },
+    {
+      "name": "Audio Processing",
+      "description": "Stems separation and concatenation"
+    },
+    {
+      "name": "Utility",
+      "description": "Query, quota, clip and persona endpoints"
+    },
+    {
+      "name": "OpenAI Compatible",
+      "description": "OpenAI API format compatibility"
+    }
+  ],
+  "security": [
+    {
+      "BearerAuth": []
     }
   ],
   "paths": {
     "/api/generate": {
       "post": {
-        "summary": "Generate audio based on Prompt.",
-        "description": "It will automatically fill in the lyrics.\n\n2 audio files will be generated for each request, consuming a total of 10 credits.\n\n`wait_audio` can be set to API mode:\n\n\u2022 By default, it is set to `false`, which indicates the background mode. It will only return audio task information, and you will need to call the get API to retrieve detailed audio information.\n\n\u2022 If set to `true`, it simulates synchronous mode. The API will wait for a maximum of 100s until the audio is generated, and will directly return the audio link and other information. Recommend using in GPTs and other agents.",
-        "tags": ["default"],
+        "summary": "Generate Music (Simple Mode)",
+        "description": "This is the key endpoint for music generation in simple (non-custom) mode. Each request returns exactly **2 songs**, consuming 10 credits total.\n\n- **Stream URL**: typically available in 30–40 seconds (`status`: `streaming`)\n- **Downloadable song URL**: usually ready in 2–3 minutes (`status`: `complete`)\n\n### Parameter usage (Simple Mode)\n\nThis endpoint maps to Suno's non-custom mode — only `prompt` is required:\n\n- **`prompt`**: always required. Serves as the core idea; Suno auto-generates lyrics based on it (lyrics may not strictly match the input). **Maximum 500 characters.**\n- **`make_instrumental`**: optional. Set `true` for instrumental-only; set `false` (default) to auto-generate vocals/lyrics.\n- **`model`**: optional. Suno model version (`mv` parameter). Defaults to `chirp-auk-turbo` if omitted.\n- **`wait_audio`**: optional. Controls sync vs async response behavior (see below).\n\nFor custom lyrics, genre tags, and title control, use `/api/custom_generate` instead.\n\n### wait_audio modes\n\n- `false` (default): **async** — returns task info immediately; poll `/api/get` with returned `id` values for status and URLs\n- `true`: **sync** — waits up to 100s until audio is generated, then returns URLs directly (recommended for GPTs and agents)\n\n### Developer notes\n\n1. **First-time users**: only provide `prompt`, set `make_instrumental` to `false` — simplest way to test the API\n2. Respect the **500-character** prompt limit in simple mode to avoid errors\n3. Use `/api/get` to actively poll task status instead of relying solely on `wait_audio`\n4. Response `status` progresses: `submitted` → `queue` → `streaming` → `complete` (or `error`)\n5. When `API_AUTH_ENABLED=true`, include `Authorization: Bearer <API_SECRET>` in request headers",
+        "tags": [
+          "Music Generation"
+        ],
         "requestBody": {
+          "required": true,
           "content": {
             "application/json": {
               "schema": {
-                "type": "object",
-                "required": ["prompt", "make_instrumental", "wait_audio"],
-                "properties": {
-                  "prompt": {
-                    "type": "string",
-                    "description": "Prompt",
-                    "example": "A popular heavy metal song about war, sung by a deep-voiced male singer, slowly and melodiously. The lyrics depict the sorrow of people after the war."
-                  },
-                  "make_instrumental": {
-                    "type": "boolean",
-                    "description": "Whether to generate instrumental music",
-                    "example": "false"
-                  },
-                  "model": {
-                    "type": "string",
-                    "description": "Model name ,default is chirp-v3-5",
-                    "example": "chirp-v3-5|chirp-v3-0"
-                  },
-                  "wait_audio": {
-                    "type": "boolean",
-                    "description": "Whether to wait for music generation, default is false, directly return audio task information; set to true, will wait for up to 100s until the audio is generated.",
-                    "example": "false"
-                  }
-                }
+                "$ref": "#/components/schemas/GenerateRequest"
               }
             }
           }
         },
         "responses": {
           "200": {
-            "description": "success",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "array",
-                  "items": {
-                    "type": "object",
-                    "required": ["0", "1"],
-                    "properties": [
-                      {
-                        "$ref": "#/components/schemas/audio_info"
-                      },
-                      {
-                        "$ref": "#/components/schemas/audio_info"
-                      }
-                    ]
-                  }
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/v1/chat/completions": {
-      "post": {
-        "summary": "Generate audio based on Prompt - OpenAI API format compatibility.",
-        "description": "Convert the `/api/generate` API to be compatible with the OpenAI `/v1/chat/completions` API format. \n\nGenerally used in OpenAI compatible clients.",
-        "tags": ["default"],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "type": "object",
-                "required": ["prompt"],
-                "properties": {
-                  "prompt": {
-                    "type": "string",
-                    "description": "Prompt",
-                    "example": "A popular heavy metal song about war, sung by a deep-voiced male singer, slowly and melodiously. The lyrics depict the sorrow of people after the war."
-                  }
-                }
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "description": "success",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "data": {
-                      "type": "string",
-                      "description": "Text description for music, with details like title, album cover, lyrics, and more."
-                    }
-                  }
-                }
-              }
-            }
+            "$ref": "#/components/responses/AudioInfoArray200"
+          },
+          "402": {
+            "$ref": "#/components/responses/PaymentRequired"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/NetworkError"
           }
         }
       }
     },
     "/api/custom_generate": {
       "post": {
-        "summary": "Generate Audio - Custom Mode",
-        "description": "The custom mode enables users to provide additional details about the music, such as music genre, lyrics, and more.\n\n 2 audio files will be generated for each request, consuming a total of 10 credits. \n\n `wait_audio` can be set to API mode:\n\n\u2022 By default, it is set to false, which indicates the background mode. It will only return audio task information, and you will need to call the get API to retrieve detailed audio information.\n\n\u2022 If set to true, it simulates synchronous mode. The API will wait for a maximum of 100s until the audio is generated, and will directly return the audio link and other information. Recommend using in GPTs and other agents.",
-        "tags": ["default"],
+        "summary": "Generate Music (Custom Mode)",
+        "description": "Custom mode lets you set lyrics, genre (tags), title, and more.\n\nEach request generates **2 audio tracks**, consuming 10 credits total.\n\n### Field requirements\n- When `make_instrumental` is `false`: `prompt`, `tags`, and `title` are required\n- When `make_instrumental` is `true`: `tags` and `title` are required; `prompt` can be omitted\n\n### wait_audio modes\n- `false` (default): async — poll `/api/get` for results\n- `true`: sync — wait up to 100s for audio URLs",
+        "tags": [
+          "Music Generation"
+        ],
         "requestBody": {
+          "required": true,
           "content": {
             "application/json": {
               "schema": {
-                "type": "object",
-                "required": ["prompt", "tags", "title"],
-                "properties": {
-                  "prompt": {
-                    "type": "string",
-                    "description": "Detailed prompt, including information such as music lyrics.",
-                    "example": "[Verse 1]\nCruel flames of war engulf this land\nBattlefields filled with death and dread\nInnocent souls in darkness, they rest\nMy heart trembles in this silent test\n\n[Verse 2]\nPeople weep for loved ones lost\nBattered bodies bear the cost\nSeeking peace and hope once known\nOur grief transforms to hearts of stone\n\n[Chorus]\nSilent battlegrounds, no birds' song\nShadows of war, where we don't belong\nMay flowers of peace bloom in this place\nLet's guard this precious dream with grace\n\n[Bridge]\nThrough the ashes, we will rise\nHand in hand, towards peaceful skies\nNo more sorrow, no more pain\nTogether, we'll break these chains\n\n[Chorus]\nSilent battlegrounds, no birds' song\nShadows of war, where we don't belong\nMay flowers of peace bloom in this place\nLet's guard this precious dream with grace\n\n[Outro]\nIn unity, our strength will grow\nA brighter future, we'll soon know\nFrom the ruins, hope will spring\nA new dawn, we'll together bring"
-                  },
-                  "tags": {
-                    "type": "string",
-                    "description": "Music genre",
-                    "example": "pop metal male melancholic"
-                  },
-                  "negative_tags": {
-                    "type": "string",
-                    "description": "Negative Music genre",
-                    "example": "female edm techno"
-                  },
-                  "title": {
-                    "type": "string",
-                    "description": "Music title",
-                    "example": "Silent Battlefield"
-                  },
-                  "make_instrumental": {
-                    "type": "boolean",
-                    "description": "Whether to generate instrumental music",
-                    "example": "false"
-                  },
-                  "model": {
-                    "type": "string",
-                    "description": "Model name ,default is chirp-v3-5",
-                    "example": "chirp-v3-5|chirp-v3-0"
-                  },
-                  "wait_audio": {
-                    "type": "boolean",
-                    "description": "Whether to wait for music generation, default is false, directly return audio task information; set to true, will wait for up to 100s until the audio is generated.",
-                    "example": "false"
-                  }
-                }
+                "$ref": "#/components/schemas/CustomGenerateRequest"
               }
             }
           }
         },
         "responses": {
           "200": {
-            "description": "success",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "array",
-                  "items": {
-                    "type": "object",
-                    "required": ["0", "1"],
-                    "properties": [
-                      {
-                        "$ref": "#/components/schemas/audio_info"
-                      },
-                      {
-                        "$ref": "#/components/schemas/audio_info"
-                      }
-                    ]
-                  }
-                }
-              }
-            }
+            "$ref": "#/components/responses/AudioInfoArray200"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
           }
         }
       }
     },
     "/api/extend_audio": {
       "post": {
-        "summary": "Extend audio length.",
-        "description": "Extend audio length.",
-        "tags": ["default"],
+        "summary": "Extend Audio Length",
+        "description": "Extend an existing audio clip. By default extends from the end of the track.\n\nUse `continue_at` (seconds) to extend from a specific point in the song.",
+        "tags": [
+          "Music Generation"
+        ],
         "requestBody": {
+          "required": true,
           "content": {
             "application/json": {
               "schema": {
-                "type": "object",
-                "required": ["audio_id"],
-                "properties": {
-                  "audio_id": {
-                    "type": "string",
-                    "description": "The ID of the audio clip to extend.",
-                    "example": "e76498dc-6ab4-4a10-a19f-8a095790e28d"
-                  },
-                  "prompt": {
-                    "type": "string",
-                    "description": "Detailed prompt, including information such as music lyrics.",
-                    "example": "[lrc]Silent battlegrounds, no birds' song\nShadows of war, where we don't belong\nMay flowers of peace bloom in this place\nLet's guard this precious dream with grace\n[endlrc]"
-                  },
-                  "continue_at": {
-                    "type": "string",
-                    "description": "Extend a new clip from a song at mm:ss(e.g. 00:30). Default extends from the end of the song.",
-                    "example": "109.96"
-                  },
-                  "title": {
-                    "type": "string",
-                    "description": "Music title",
-                    "example": ""
-                  },
-                  "tags": {
-                    "type": "string",
-                    "description": "Music genre",
-                    "example": ""
-                  },
-                  "negative_tags": {
-                    "type": "string",
-                    "description": "Negative Music genre",
-                    "example":""
-                  },
-                  "model": {
-                    "type": "string",
-                    "description": "Model name ,default is chirp-v3-5",
-                    "example": "chirp-v3-5|chirp-v3-0"
-                  }
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/generate_stems": {
-      "post": {
-        "summary": "Make stem tracks (separate audio and music track).",
-        "description": "Make stem tracks (separate audio and music track).",
-        "tags": ["default"],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "type": "object",
-                "required": ["audio_id"],
-                "properties": {
-                  "audio_id": {
-                    "type": "string",
-                    "description": "The ID of the song to generate stems for.",
-                    "example": "e76498dc-6ab4-4a10-a19f-8a095790e28d"
-                  }
-                }
+                "$ref": "#/components/schemas/ExtendAudioRequest"
               }
             }
           }
         },
         "responses": {
           "200": {
-            "$ref": "#/components/schemas/audio_info"
+            "$ref": "#/components/responses/AudioInfoArray200"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "402": {
+            "$ref": "#/components/responses/PaymentRequired"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/NetworkError"
           }
         }
       }
     },
     "/api/generate_lyrics": {
       "post": {
-        "summary": "Generate lyrics based on Prompt.",
-        "description": "Generate lyrics based on Prompt.",
-        "tags": ["default"],
+        "summary": "Generate Lyrics",
+        "description": "Generate lyrics from a text prompt without creating audio.",
+        "tags": [
+          "Lyrics"
+        ],
         "requestBody": {
+          "required": true,
           "content": {
             "application/json": {
               "schema": {
-                "type": "object",
-                "required": ["prompt"],
-                "properties": {
-                  "prompt": {
-                    "type": "string",
-                    "description": "Prompt",
-                    "example": "A soothing lullaby"
-                  }
-                }
+                "$ref": "#/components/schemas/GenerateLyricsRequest"
               }
             }
           }
         },
         "responses": {
           "200": {
-            "description": "success",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "text": {
-                      "type": "string",
-                      "description": "Lyrics"
-                    },
-                    "title": {
-                      "type": "string",
-                      "description": "music title"
-                    },
-                    "status": {
-                      "type": "string",
-                      "description": "Status"
-                    }
-                  }
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/get": {
-      "get": {
-        "summary": "Get audio information",
-        "description": "",
-        "tags": ["default"],
-        "parameters": [
-          {
-            "in": "query",
-            "name": "ids",
-            "description": "Audio IDs, separated by commas. Leave blank to return a list of all music.",
-            "required": false,
-            "schema": {
-              "type": "string"
-            }
+            "$ref": "#/components/responses/Lyrics200"
           },
-          {
-            "in": "query",
-            "name": "page",
-            "description": "Page number",
-            "required": false,
-            "schema": {
-              "type": "number"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "success",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "array",
-                  "items": {
-                    "type": "object",
-                    "required": ["0", "1"],
-                    "properties": [
-                      {
-                        "$ref": "#/components/schemas/audio_info"
-                      },
-                      {
-                        "$ref": "#/components/schemas/audio_info"
-                      }
-                    ]
-                  }
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/get_limit": {
-      "get": {
-        "summary": "Get quota information.",
-        "description": "",
-        "tags": ["default"],
-        "responses": {
-          "200": {
-            "description": "success",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "required": [
-                    "credits_left",
-                    "period",
-                    "monthly_limit",
-                    "monthly_usage"
-                  ],
-                  "properties": {
-                    "credits_left": {
-                      "type": "number",
-                      "description": "Remaining credits,Each generated audio consumes 5 credits."
-                    },
-                    "period": {
-                      "type": "string",
-                      "description": "Period"
-                    },
-                    "monthly_limit": {
-                      "type": "number",
-                      "description": "Monthly limit"
-                    },
-                    "monthly_usage": {
-                      "type": "number",
-                      "description": "Monthly usage"
-                    }
-                  }
-                }
-              }
-            }
+          "402": {
+            "$ref": "#/components/responses/PaymentRequired"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/NetworkError"
           }
         }
       }
     },
     "/api/get_aligned_lyrics": {
       "get": {
-        "summary": "Get lyric alignment.",
-        "description": "Get lyric alignment.",
-        "tags": ["default"],
+        "summary": "Get Timestamped Lyrics",
+        "description": "Retrieve word-level timestamps for synchronized lyric display during playback.",
+        "tags": [
+          "Lyrics"
+        ],
         "parameters": [
           {
             "name": "song_id",
             "in": "query",
             "required": true,
-            "description": "Song ID",
+            "description": "The audio/song ID to fetch aligned lyrics for.",
             "schema": {
               "type": "string"
-            }
+            },
+            "example": "e76498dc-6ab4-4a10-a19f-8a095790e28d"
           }
         ],
         "responses": {
           "200": {
-            "$ref": "#/components/schemas/audio_info"
+            "$ref": "#/components/responses/AlignedLyrics200"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        }
+      }
+    },
+    "/api/generate_stems": {
+      "post": {
+        "summary": "Generate Stem Tracks",
+        "description": "Separate a song into stem tracks (e.g. vocals and instrumental).",
+        "tags": [
+          "Audio Processing"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GenerateStemsRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/StemInfoArray200"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "402": {
+            "$ref": "#/components/responses/PaymentRequired"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/NetworkError"
+          }
+        }
+      }
+    },
+    "/api/concat": {
+      "post": {
+        "summary": "Concatenate Extended Clips",
+        "description": "Merge extended audio clips into a complete song using the clip ID.",
+        "tags": [
+          "Audio Processing"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ConcatRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/AudioInfo200"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "402": {
+            "$ref": "#/components/responses/PaymentRequired"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/NetworkError"
+          }
+        }
+      }
+    },
+    "/api/get": {
+      "get": {
+        "summary": "Get Audio Information",
+        "description": "Fetch audio metadata by ID(s). Omit `ids` to list all music.\n\n- Multiple IDs: comma-separated, e.g. `id1,id2`\n- Use `page` for pagination when listing all tracks",
+        "tags": [
+          "Utility"
+        ],
+        "parameters": [
+          {
+            "name": "ids",
+            "in": "query",
+            "required": false,
+            "description": "Audio IDs, comma-separated. Leave blank to return all music.",
+            "schema": {
+              "type": "string"
+            },
+            "example": "91c6659f-19f6-4cbf-8e5e-5e6bf7a225ce,2fb7ba36-3167-4038-ac2f-ae0c2b668a79"
+          },
+          {
+            "name": "page",
+            "in": "query",
+            "required": false,
+            "description": "Page number for paginated results.",
+            "schema": {
+              "type": "string"
+            },
+            "example": "1"
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/AudioInfoGetArray200"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        }
+      }
+    },
+    "/api/get_limit": {
+      "get": {
+        "summary": "Get Quota Information",
+        "description": "Returns remaining credits and monthly usage for the authenticated Suno account.",
+        "tags": [
+          "Utility"
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Limit200"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
           }
         }
       }
     },
     "/api/clip": {
       "get": {
-        "summary": "Get clip information based on ID.",
-        "description": "Retrieve specific clip information using the provided clip ID as a query parameter.",
-        "tags": ["default"],
+        "summary": "Get Clip Information",
+        "description": "Retrieve clip details by clip ID.",
+        "tags": [
+          "Utility"
+        ],
         "parameters": [
           {
             "name": "id",
@@ -457,143 +341,30 @@
             "description": "Clip ID",
             "schema": {
               "type": "string"
-            }
+            },
+            "example": "e76498dc-6ab4-4a10-a19f-8a095790e28d"
           }
         ],
         "responses": {
           "200": {
-            "description": "success",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/audio_info"
-                }
-              }
-            }
+            "$ref": "#/components/responses/AudioInfo200"
           },
           "400": {
-            "description": "Missing parameter id",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "error": {
-                      "type": "string",
-                      "example": "Missing parameter id"
-                    }
-                  }
-                }
-              }
-            }
+            "$ref": "#/components/responses/BadRequest"
           },
           "500": {
-            "description": "Internal server error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "error": {
-                      "type": "string",
-                      "example": "Internal server error"
-                    }
-                  }
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/concat": {
-      "post": {
-        "summary": "Generate the whole song from extensions.",
-        "description": "Concatenate audio clips to generate a complete song using the provided clip ID.",
-        "tags": ["default"],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "type": "object",
-                "required": ["clip_id"],
-                "properties": {
-                  "clip_id": {
-                    "type": "string",
-                    "description": "Clip ID"
-                  }
-                }
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "description": "success",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/audio_info"
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "Clip id is required",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "error": {
-                      "type": "string",
-                      "example": "Clip id is required"
-                    }
-                  }
-                }
-              }
-            }
-          },
-          "402": {
-            "description": "Payment required",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "error": {
-                      "type": "string",
-                      "example": "Payment required"
-                    }
-                  }
-                }
-              }
-            }
-          },
-          "500": {
-            "description": "Internal server error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "error": {
-                      "type": "string",
-                      "example": "Internal server error"
-                    }
-                  }
-                }
-              }
-            }
+            "$ref": "#/components/responses/InternalError"
           }
         }
       }
     },
     "/api/persona": {
       "get": {
-        "summary": "Get persona information and clips.",
-        "description": "Retrieve persona information, including associated clips and pagination data.",
-        "tags": ["default"],
+        "summary": "Get Persona Information",
+        "description": "Retrieve persona details and associated clips with pagination.",
+        "tags": [
+          "Utility"
+        ],
         "parameters": [
           {
             "name": "id",
@@ -602,7 +373,8 @@
             "description": "Persona ID",
             "schema": {
               "type": "string"
-            }
+            },
+            "example": "persona_abc123"
           },
           {
             "name": "page",
@@ -612,202 +384,888 @@
             "schema": {
               "type": "integer",
               "default": 1
-            }
+            },
+            "example": 1
           }
         ],
         "responses": {
           "200": {
-            "description": "success",
+            "$ref": "#/components/responses/Persona200"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        }
+      }
+    },
+    "/v1/chat/completions": {
+      "post": {
+        "summary": "Generate Music (OpenAI Format)",
+        "description": "OpenAI-compatible wrapper around `/api/generate`. Accepts a `messages` array and returns markdown with title, cover, lyrics, and audio URL.\n\nGenerally used in OpenAI-compatible clients and GPTs.",
+        "tags": [
+          "OpenAI Compatible"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ChatCompletionsRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Markdown text with song title, cover image, lyrics, and audio URL",
             "content": {
-              "application/json": {
+              "text/plain": {
                 "schema": {
-                  "type": "object",
-                  "properties": {
-                    "persona": {
-                      "type": "object",
-                      "properties": {
-                        "id": {
-                          "type": "string",
-                          "description": "Persona ID"
-                        },
-                        "name": {
-                          "type": "string",
-                          "description": "Persona name"
-                        },
-                        "description": {
-                          "type": "string",
-                          "description": "Persona description"
-                        },
-                        "image_s3_id": {
-                          "type": "string",
-                          "description": "Persona image URL"
-                        },
-                        "root_clip_id": {
-                          "type": "string",
-                          "description": "Root clip ID"
-                        },
-                        "clip": {
-                          "type": "object",
-                          "description": "Root clip information"
-                        },
-                        "persona_clips": {
-                          "type": "array",
-                          "items": {
-                            "type": "object",
-                            "properties": {
-                              "clip": {
-                                "type": "object",
-                                "description": "Clip information"
-                              }
-                            }
-                          }
-                        },
-                        "is_suno_persona": {
-                          "type": "boolean",
-                          "description": "Whether this is a Suno official persona"
-                        },
-                        "is_public": {
-                          "type": "boolean",
-                          "description": "Whether this persona is public"
-                        },
-                        "upvote_count": {
-                          "type": "integer",
-                          "description": "Number of upvotes"
-                        },
-                        "clip_count": {
-                          "type": "integer",
-                          "description": "Number of clips"
-                        }
-                      }
-                    },
-                    "total_results": {
-                      "type": "integer",
-                      "description": "Total number of results"
-                    },
-                    "current_page": {
-                      "type": "integer",
-                      "description": "Current page number"
-                    },
-                    "is_following": {
-                      "type": "boolean",
-                      "description": "Whether the current user is following this persona"
-                    }
-                  }
-                }
+                  "type": "string"
+                },
+                "example": "## Song Title: Peaceful Piano\n![Song Cover](https://example.com/cover.jpeg)\n### Lyrics:\n[Verse] Soft melodies...\n### Listen to the song: https://example.com/audio.mp3"
               }
             }
           },
           "400": {
-            "description": "Missing parameter id",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "error": {
-                      "type": "string",
-                      "example": "Missing parameter id"
-                    }
-                  }
-                }
-              }
-            }
+            "$ref": "#/components/responses/BadRequest"
           },
           "500": {
-            "description": "Internal server error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "error": {
-                      "type": "string",
-                      "example": "Internal server error"
-                    }
-                  }
-                }
-              }
-            }
+            "$ref": "#/components/responses/InternalError"
           }
         }
       }
     }
   },
   "components": {
+    "securitySchemes": {
+      "BearerAuth": {
+        "type": "http",
+        "scheme": "bearer",
+        "description": "When `API_AUTH_ENABLED=true`, send `Authorization: Bearer <API_SECRET>`. Obtain `API_SECRET` from your `.env` file (e.g. `openssl rand -hex 32`)."
+      }
+    },
     "schemas": {
-      "audio_info": {
+      "ModelName": {
+        "type": "string",
+        "default": "chirp-auk-turbo",
+        "description": "Suno model version passed as the `mv` parameter to Suno's generation API.\n\nAvailable options:\n\n- **`chirp-auk-turbo`**: V4.5-all — **Free Plan default** (Best free model)\n- **`chirp-auk`**: V4.5 Pro — requires Pro/Premier subscription\n- **`chirp-v4`**: V4 Pro\n- **`chirp-bluejay`**: V4.5+ Pro\n- **`chirp-crow`**: V5 Pro\n- **`chirp-fenix`**: V5.5 Pro\n\nOmit this field to use the server default (`chirp-auk-turbo`). Use the model matching your Suno plan tier.",
+        "enum": [
+          "chirp-auk-turbo",
+          "chirp-auk",
+          "chirp-v4",
+          "chirp-bluejay",
+          "chirp-crow",
+          "chirp-fenix"
+        ],
+        "example": "chirp-auk-turbo"
+      },
+      "GenerateRequest": {
         "type": "object",
         "required": [
-          "id",
-          "title",
-          "image_url",
-          "lyric",
-          "audio_url",
-          "video_url",
-          "created_at",
-          "model_name",
-          "status",
-          "gpt_description_prompt",
-          "prompt",
-          "type",
-          "tags"
+          "prompt"
         ],
         "properties": {
-          "id": {
-            "type": "string",
-            "description": "audio id"
-          },
-          "title": {
-            "type": "string",
-            "description": "music title"
-          },
-          "image_url": {
-            "type": "string",
-            "description": "music cover image"
-          },
-          "lyric": {
-            "type": "string",
-            "description": "music lyric"
-          },
-          "audio_url": {
-            "type": "string",
-            "description": "music download url"
-          },
-          "video_url": {
-            "type": "string",
-            "description": "Music video download link, can be used to share"
-          },
-          "created_at": {
-            "type": "string",
-            "description": "Create time"
-          },
-          "model_name": {
-            "type": "string",
-            "description": "suno model name, chirp-v3"
-          },
-          "status": {
-            "type": "string",
-            "description": "The generated states include submitted, queue, streaming, complete."
-          },
-          "gpt_description_prompt": {
-            "type": "string",
-            "description": "Simple mode on user input prompt, Suno will generate formal prompts, lyrics, etc."
-          },
           "prompt": {
             "type": "string",
-            "description": "The final prompt for executing the generation task, customized by the user in custom mode, automatically generated by Suno in simple mode."
+            "maxLength": 500,
+            "description": "A description of the desired audio content.\n\nIn Simple Mode (this endpoint):\n\n- **Always required**\n- Serves as the core creative idea; Suno **auto-generates lyrics** from it (output may not strictly match the input)\n- **Maximum 500 characters** — exceeding this may cause errors\n\nExamples:\n\n- \"A calm and relaxing piano track with soft melodies\"\n- \"An upbeat electronic dance track with heavy bass and energetic drops\"\n- \"A popular heavy metal song about war, sung by a deep-voiced male singer\"",
+            "example": "A popular heavy metal song about war, sung by a deep-voiced male singer, slowly and melodiously. The lyrics depict the sorrow of people after the war."
           },
-          "type": {
+          "make_instrumental": {
+            "type": "boolean",
+            "default": false,
+            "description": "Determines if the audio should be instrumental (no lyrics/vocals).\n\n- **`false`** (default): Suno auto-generates lyrics and vocals from `prompt`\n- **`true`**: generates instrumental-only track with no vocals\n\nIn Simple Mode, only `prompt` is required regardless of this setting.",
+            "enum": [
+              true,
+              false
+            ],
+            "example": false
+          },
+          "model": {
+            "$ref": "#/components/schemas/ModelName"
+          },
+          "wait_audio": {
+            "type": "boolean",
+            "default": false,
+            "description": "Controls whether the API waits for audio generation before responding.\n\n- **`false`** (default): async/background mode — returns clip metadata immediately (`status` may be `submitted` or `queue`); call `/api/get?ids=<id>` to poll for `streaming`/`complete` and audio URLs\n- **`true`**: sync mode — blocks up to **100 seconds** waiting for generation; returns `audio_url` directly when ready (best for GPTs and synchronous clients)",
+            "enum": [
+              true,
+              false
+            ],
+            "example": false
+          }
+        },
+        "example": {
+          "prompt": "A popular heavy metal song about war, sung by a deep-voiced male singer, slowly and melodiously. The lyrics depict the sorrow of people after the war.",
+          "make_instrumental": false,
+          "model": "chirp-auk-turbo",
+          "wait_audio": false
+        }
+      },
+      "CustomGenerateRequest": {
+        "type": "object",
+        "required": [
+          "tags",
+          "title"
+        ],
+        "properties": {
+          "prompt": {
             "type": "string",
-            "description": "Type"
+            "description": "Lyrics or detailed prompt.\n\n- Required when `make_instrumental` is `false`\n- Can be omitted for instrumental tracks",
+            "example": "[Verse 1]\nCruel flames of war engulf this land\nBattlefields filled with death and dread\nInnocent souls in darkness, they rest\nMy heart trembles in this silent test\n\n[Verse 2]\nPeople weep for loved ones lost\nBattered bodies bear the cost\nSeeking peace and hope once known\nOur grief transforms to hearts of stone\n\n[Chorus]\nSilent battlegrounds, no birds' song\nShadows of war, where we don't belong\nMay flowers of peace bloom in this place\nLet's guard this precious dream with grace\n\n[Bridge]\nThrough the ashes, we will rise\nHand in hand, towards peaceful skies\nNo more sorrow, no more pain\nTogether, we'll break these chains\n\n[Chorus]\nSilent battlegrounds, no birds' song\nShadows of war, where we don't belong\nMay flowers of peace bloom in this place\nLet's guard this precious dream with grace\n\n[Outro]\nIn unity, our strength will grow\nA brighter future, we'll soon know\nFrom the ruins, hope will spring\nA new dawn, we'll together bring"
           },
           "tags": {
             "type": "string",
-            "description": "Music genre. User-provided in custom mode, automatically generated by Suno in simple mode."
+            "description": "Music style or genre tags.",
+            "example": "pop metal male melancholic"
+          },
+          "negative_tags": {
+            "type": "string",
+            "description": "Styles or traits to exclude from generation.",
+            "example": "female edm techno"
+          },
+          "title": {
+            "type": "string",
+            "description": "Title of the generated track.",
+            "example": "Silent Battlefield"
+          },
+          "make_instrumental": {
+            "type": "boolean",
+            "default": false,
+            "description": "Whether to generate instrumental-only audio.\n\n- `true`: only `tags` and `title` required\n- `false`: `prompt`, `tags`, and `title` required",
+            "enum": [
+              true,
+              false
+            ]
+          },
+          "model": {
+            "$ref": "#/components/schemas/ModelName"
+          },
+          "wait_audio": {
+            "type": "boolean",
+            "default": false,
+            "description": "Whether to wait for generation to complete (up to 100s).",
+            "enum": [
+              true,
+              false
+            ]
           }
         },
-        "title": "audio_info",
-        "description": "Audio Info"
+        "example": {
+          "prompt": "[Verse 1]\nCruel flames of war engulf this land\nBattlefields filled with death and dread\nInnocent souls in darkness, they rest\nMy heart trembles in this silent test\n\n[Verse 2]\nPeople weep for loved ones lost\nBattered bodies bear the cost\nSeeking peace and hope once known\nOur grief transforms to hearts of stone\n\n[Chorus]\nSilent battlegrounds, no birds' song\nShadows of war, where we don't belong\nMay flowers of peace bloom in this place\nLet's guard this precious dream with grace\n\n[Bridge]\nThrough the ashes, we will rise\nHand in hand, towards peaceful skies\nNo more sorrow, no more pain\nTogether, we'll break these chains\n\n[Chorus]\nSilent battlegrounds, no birds' song\nShadows of war, where we don't belong\nMay flowers of peace bloom in this place\nLet's guard this precious dream with grace\n\n[Outro]\nIn unity, our strength will grow\nA brighter future, we'll soon know\nFrom the ruins, hope will spring\nA new dawn, we'll together bring",
+          "tags": "pop metal male melancholic",
+          "negative_tags": "female edm techno",
+          "title": "Silent Battlefield",
+          "make_instrumental": false,
+          "model": "chirp-auk-turbo",
+          "wait_audio": false
+        }
+      },
+      "ExtendAudioRequest": {
+        "type": "object",
+        "required": [
+          "audio_id"
+        ],
+        "properties": {
+          "audio_id": {
+            "type": "string",
+            "description": "ID of the audio clip to extend.",
+            "example": "91c6659f-19f6-4cbf-8e5e-5e6bf7a225ce"
+          },
+          "prompt": {
+            "type": "string",
+            "description": "Lyrics or continuation prompt for the extended section.",
+            "example": "[lrc]Silent battlegrounds, no birds' song\nShadows of war, where we don't belong\nMay flowers of peace bloom in this place\nLet's guard this precious dream with grace\n[endlrc]"
+          },
+          "continue_at": {
+            "type": "number",
+            "description": "Extend from this point in seconds (e.g. 109.96). Defaults to end of track.",
+            "example": 109.96
+          },
+          "title": {
+            "type": "string",
+            "description": "Title for the extended clip.",
+            "example": "Silent Battlefield (Extended)"
+          },
+          "tags": {
+            "type": "string",
+            "description": "Music genre tags.",
+            "example": "pop metal male melancholic"
+          },
+          "negative_tags": {
+            "type": "string",
+            "description": "Styles to exclude.",
+            "example": "female edm techno"
+          },
+          "model": {
+            "$ref": "#/components/schemas/ModelName"
+          },
+          "wait_audio": {
+            "type": "boolean",
+            "default": false,
+            "description": "Whether to wait for generation to complete.",
+            "enum": [
+              true,
+              false
+            ]
+          }
+        },
+        "example": {
+          "audio_id": "91c6659f-19f6-4cbf-8e5e-5e6bf7a225ce",
+          "prompt": "[lrc]Silent battlegrounds, no birds' song\nShadows of war, where we don't belong\nMay flowers of peace bloom in this place\nLet's guard this precious dream with grace\n[endlrc]",
+          "continue_at": 170.84,
+          "title": "Silent Battlefield (Extended)",
+          "tags": "pop metal male melancholic",
+          "negative_tags": "female edm techno",
+          "model": "chirp-auk-turbo",
+          "wait_audio": false
+        }
+      },
+      "GenerateStemsRequest": {
+        "type": "object",
+        "required": [
+          "audio_id"
+        ],
+        "properties": {
+          "audio_id": {
+            "type": "string",
+            "description": "ID of the song to generate stems for.",
+            "example": "e76498dc-6ab4-4a10-a19f-8a095790e28d"
+          }
+        },
+        "example": {
+          "audio_id": "e76498dc-6ab4-4a10-a19f-8a095790e28d"
+        }
+      },
+      "GenerateLyricsRequest": {
+        "type": "object",
+        "required": [
+          "prompt"
+        ],
+        "properties": {
+          "prompt": {
+            "type": "string",
+            "description": "Theme or idea for the lyrics.",
+            "example": "A soothing lullaby"
+          }
+        },
+        "example": {
+          "prompt": "A soothing lullaby"
+        }
+      },
+      "ConcatRequest": {
+        "type": "object",
+        "required": [
+          "clip_id"
+        ],
+        "properties": {
+          "clip_id": {
+            "type": "string",
+            "description": "Clip ID of the extended track to concatenate into a full song.",
+            "example": "e76498dc-6ab4-4a10-a19f-8a095790e28d"
+          }
+        },
+        "example": {
+          "clip_id": "e76498dc-6ab4-4a10-a19f-8a095790e28d"
+        }
+      },
+      "ChatCompletionsRequest": {
+        "type": "object",
+        "required": [
+          "messages"
+        ],
+        "properties": {
+          "messages": {
+            "type": "array",
+            "description": "OpenAI-style message array. At least one message with `role: user` is required.",
+            "items": {
+              "type": "object",
+              "required": [
+                "role",
+                "content"
+              ],
+              "properties": {
+                "role": {
+                  "type": "string",
+                  "enum": [
+                    "user",
+                    "assistant",
+                    "system"
+                  ],
+                  "example": "user"
+                },
+                "content": {
+                  "type": "string",
+                  "description": "Music generation prompt.",
+                  "example": "A popular heavy metal song about war, sung by a deep-voiced male singer, slowly and melodiously. The lyrics depict the sorrow of people after the war."
+                }
+              }
+            }
+          }
+        },
+        "example": {
+          "messages": [
+            {
+              "role": "user",
+              "content": "A popular heavy metal song about war, sung by a deep-voiced male singer, slowly and melodiously. The lyrics depict the sorrow of people after the war."
+            }
+          ]
+        }
+      },
+      "audio_info": {
+        "type": "object",
+        "description": "Audio track metadata returned by generation and query endpoints.",
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "Unique audio ID.",
+            "example": "91c6659f-19f6-4cbf-8e5e-5e6bf7a225ce"
+          },
+          "title": {
+            "type": "string",
+            "description": "Track title.",
+            "example": "Bend So Low"
+          },
+          "image_url": {
+            "type": "string",
+            "description": "Cover image URL.",
+            "example": "https://cdn2.suno.ai/image_91c6659f-19f6-4cbf-8e5e-5e6bf7a225ce.jpeg"
+          },
+          "lyric": {
+            "type": "string",
+            "description": "Lyrics text.",
+            "example": "[Verse] Soft melodies drift through the air"
+          },
+          "audio_url": {
+            "type": "string",
+            "description": "Downloadable audio URL.",
+            "example": "https://cdn1.suno.ai/91c6659f-19f6-4cbf-8e5e-5e6bf7a225ce.mp3"
+          },
+          "video_url": {
+            "type": "string",
+            "description": "Music video URL for sharing.",
+            "example": "https://cdn.example.com/video.mp4"
+          },
+          "created_at": {
+            "type": "string",
+            "description": "Creation timestamp.",
+            "example": "2026-06-23T07:53:41.194Z"
+          },
+          "model_name": {
+            "type": "string",
+            "description": "Suno model used.",
+            "example": "chirp-auk"
+          },
+          "status": {
+            "type": "string",
+            "description": "Generation lifecycle status:\n\n- **`submitted`**: task accepted, waiting to start\n- **`queue`**: queued for generation\n- **`streaming`**: partial/streaming audio available (~30–40s after request)\n- **`complete`**: full downloadable audio ready (~2–3 min after request)\n- **`error`**: generation failed — check `error_message` if present",
+            "enum": [
+              "submitted",
+              "queue",
+              "streaming",
+              "complete",
+              "error"
+            ],
+            "example": "complete"
+          },
+          "error_message": {
+            "type": "string",
+            "description": "Human-readable error detail when `status` is `error`."
+          },
+          "duration": {
+            "type": "string",
+            "description": "Audio duration in seconds, populated when generation completes.",
+            "example": "170.84"
+          },
+          "gpt_description_prompt": {
+            "type": "string",
+            "description": "Original user prompt in simple mode.",
+            "example": "A high-energy dance hall track"
+          },
+          "prompt": {
+            "type": "string",
+            "description": "Final generation prompt (auto-generated in simple mode, user-provided in custom mode)."
+          },
+          "type": {
+            "type": "string",
+            "description": "Track type identifier.",
+            "example": "gen"
+          },
+          "tags": {
+            "type": "string",
+            "description": "Music genre tags.",
+            "example": "Dancehall with uptempo dembow bounce, skittering hi-hats, punchy kick-snare, and rubbery sub-bass; verse stays clipped and percussive, pre-chorus strips to drums and bass with rising chants, chorus lands with big crowd hooks and bright synth stabs. Lead vocal is gritty and close-mic with doubled hook lines, ad-lib throws, and gang vocals on the chant. Ear candy: reverse cymbal lifts, bass drops before the chorus, and little horn pops between phrases. Mix is loud, glossy, and hard-hitting."
+          }
+        }
+      },
+      "AudioInfoArray": {
+        "type": "array",
+        "items": {
+          "$ref": "#/components/schemas/audio_info"
+        }
+      },
+      "StemInfo": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "example": "stem-id-001"
+          },
+          "status": {
+            "type": "string",
+            "example": "complete"
+          },
+          "created_at": {
+            "type": "string",
+            "example": "2025-01-01T00:00:00.000Z"
+          },
+          "title": {
+            "type": "string",
+            "example": "Vocals"
+          },
+          "stem_from_id": {
+            "type": "string",
+            "example": "e76498dc-6ab4-4a10-a19f-8a095790e28d"
+          },
+          "duration": {
+            "type": "number",
+            "example": 198.44
+          }
+        }
+      },
+      "AlignedWord": {
+        "type": "object",
+        "properties": {
+          "word": {
+            "type": "string",
+            "example": "hello"
+          },
+          "start_s": {
+            "type": "number",
+            "example": 1.23
+          },
+          "end_s": {
+            "type": "number",
+            "example": 1.56
+          },
+          "success": {
+            "type": "boolean",
+            "example": true
+          },
+          "p_align": {
+            "type": "number",
+            "example": 0.95
+          }
+        }
+      },
+      "LyricsResponse": {
+        "type": "object",
+        "properties": {
+          "text": {
+            "type": "string",
+            "description": "Generated lyrics.",
+            "example": "[Verse]\nStars above..."
+          },
+          "title": {
+            "type": "string",
+            "description": "Suggested song title.",
+            "example": "Starlight Lullaby"
+          },
+          "status": {
+            "type": "string",
+            "description": "Generation status.",
+            "example": "complete"
+          }
+        }
+      },
+      "LimitResponse": {
+        "type": "object",
+        "properties": {
+          "credits_left": {
+            "type": "number",
+            "description": "Remaining credits. Each generated audio consumes 5 credits.",
+            "example": 20
+          },
+          "period": {
+            "type": "string",
+            "description": "Billing period.",
+            "example": "monthly"
+          },
+          "monthly_limit": {
+            "type": "number",
+            "description": "Monthly credit limit.",
+            "example": 50
+          },
+          "monthly_usage": {
+            "type": "number",
+            "description": "Credits used this month.",
+            "example": 30
+          }
+        }
+      },
+      "PersonaResponse": {
+        "type": "object",
+        "properties": {
+          "persona": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string",
+                "example": "persona_abc123"
+              },
+              "name": {
+                "type": "string",
+                "example": "Rock Vocalist"
+              },
+              "description": {
+                "type": "string",
+                "example": "A powerful rock vocal style"
+              },
+              "image_s3_id": {
+                "type": "string",
+                "example": "https://cdn.example.com/persona.jpg"
+              },
+              "root_clip_id": {
+                "type": "string",
+                "example": "clip-id-001"
+              },
+              "clip": {
+                "type": "object",
+                "description": "Root clip information"
+              },
+              "persona_clips": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "clip": {
+                      "type": "object",
+                      "description": "Associated clip info"
+                    }
+                  }
+                }
+              },
+              "is_suno_persona": {
+                "type": "boolean",
+                "example": false
+              },
+              "is_public": {
+                "type": "boolean",
+                "example": true
+              },
+              "upvote_count": {
+                "type": "integer",
+                "example": 42
+              },
+              "clip_count": {
+                "type": "integer",
+                "example": 10
+              }
+            }
+          },
+          "total_results": {
+            "type": "integer",
+            "example": 10
+          },
+          "current_page": {
+            "type": "integer",
+            "example": 1
+          },
+          "is_following": {
+            "type": "boolean",
+            "example": false
+          }
+        }
+      },
+      "ErrorResponse": {
+        "type": "object",
+        "properties": {
+          "error": {
+            "type": "string",
+            "description": "Error message.",
+            "example": "Internal server error"
+          }
+        }
+      }
+    },
+    "responses": {
+      "AudioInfo200": {
+        "description": "Success — single audio object (complete state).\n\nSource: `tests/get-response.json` (first item).",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/audio_info"
+            },
+            "example": {
+              "id": "91c6659f-19f6-4cbf-8e5e-5e6bf7a225ce",
+              "title": "Bend So Low",
+              "image_url": "https://cdn2.suno.ai/image_91c6659f-19f6-4cbf-8e5e-5e6bf7a225ce.jpeg",
+              "lyric": "[Verse 1]\nStep in the room, make space\nHeel to toe, nice pace\nWine slow, then spin fast\nEverybody want that last\nBend low, let it show\nCatch the groove and let it go\n[Pre-Chorus]\nHold tight, now release\nBody move, find the heat\nOne more step, don't stop\nFeel that pressure rise up\n[Chorus]\nBend so low, bend so low\nBend so low, let it go\nBend so low, bend so low\nMove that waist, steal the show\n(steal the show)\nBend so low, bend so low\nWhen you drop, everybody know\n[Verse 2]\nFresh fit, clean cut\nBassline shake, back up\nHands up, then dip down\nMake the whole place turn around\nSide to side, never bored\nWatch your name get called for sure\n[Pre-Chorus]\nHold tight, now release\nBody move, find the heat\nOne more step, don't stop\nFeel that pressure rise up\n[Chorus]\nBend so low, bend so low\nBend so low, let it go\nBend so low, bend so low\nMove that waist, steal the show\n(steal the show)\nBend so low, bend so low\nWhen you drop, everybody know\n[Bridge]\nTouch the floor, come back clean\nMake it slick, make it mean\nOne breath, then you break\nWhole place jumping when you shake\n[Chorus]\nBend so low, bend so low\nBend so low, let it go\nBend so low, bend so low\nMove that waist, steal the show\n(steal the show)\nBend so low, bend so low\nWhen you drop, everybody know",
+              "audio_url": "https://cdn1.suno.ai/91c6659f-19f6-4cbf-8e5e-5e6bf7a225ce.mp3",
+              "video_url": "",
+              "created_at": "2026-06-23T07:53:41.194Z",
+              "model_name": "chirp-auk",
+              "status": "complete",
+              "gpt_description_prompt": "A high-energy dance hall track",
+              "prompt": "[Verse 1]\nStep in the room, make space\nHeel to toe, nice pace\nWine slow, then spin fast\nEverybody want that last\nBend low, let it show\nCatch the groove and let it go\n\n[Pre-Chorus]\nHold tight, now release\nBody move, find the heat\nOne more step, don't stop\nFeel that pressure rise up\n\n[Chorus]\nBend so low, bend so low\nBend so low, let it go\nBend so low, bend so low\nMove that waist, steal the show\n(steal the show)\nBend so low, bend so low\nWhen you drop, everybody know\n\n[Verse 2]\nFresh fit, clean cut\nBassline shake, back up\nHands up, then dip down\nMake the whole place turn around\nSide to side, never bored\nWatch your name get called for sure\n\n[Pre-Chorus]\nHold tight, now release\nBody move, find the heat\nOne more step, don't stop\nFeel that pressure rise up\n\n[Chorus]\nBend so low, bend so low\nBend so low, let it go\nBend so low, bend so low\nMove that waist, steal the show\n(steal the show)\nBend so low, bend so low\nWhen you drop, everybody know\n\n[Bridge]\nTouch the floor, come back clean\nMake it slick, make it mean\nOne breath, then you break\nWhole place jumping when you shake\n\n[Chorus]\nBend so low, bend so low\nBend so low, let it go\nBend so low, bend so low\nMove that waist, steal the show\n(steal the show)\nBend so low, bend so low\nWhen you drop, everybody know",
+              "type": "gen",
+              "tags": "Dancehall with uptempo dembow bounce, skittering hi-hats, punchy kick-snare, and rubbery sub-bass; verse stays clipped and percussive, pre-chorus strips to drums and bass with rising chants, chorus lands with big crowd hooks and bright synth stabs. Lead vocal is gritty and close-mic with doubled hook lines, ad-lib throws, and gang vocals on the chant. Ear candy: reverse cymbal lifts, bass drops before the chorus, and little horn pops between phrases. Mix is loud, glossy, and hard-hitting.",
+              "duration": 170.84
+            }
+          }
+        }
+      },
+      "AudioInfoArray200": {
+        "description": "Success — array of exactly 2 audio objects per generation request (async initial response).\n\nSource: `tests/generate-response.json`. When `wait_audio` is `false`, `audio_url` is usually empty and `status` is `submitted`; poll `/api/get?ids=` until `streaming` or `complete`.",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/AudioInfoArray"
+            },
+            "example": [
+              {
+                "id": "91c6659f-19f6-4cbf-8e5e-5e6bf7a225ce",
+                "title": "",
+                "lyric": "",
+                "audio_url": "",
+                "video_url": "",
+                "created_at": "2026-06-23T07:53:41.194Z",
+                "model_name": "chirp-auk",
+                "status": "submitted",
+                "gpt_description_prompt": "A high-energy dance hall track",
+                "prompt": "",
+                "type": "gen"
+              },
+              {
+                "id": "2fb7ba36-3167-4038-ac2f-ae0c2b668a79",
+                "title": "",
+                "lyric": "",
+                "audio_url": "",
+                "video_url": "",
+                "created_at": "2026-06-23T07:53:41.194Z",
+                "model_name": "chirp-auk",
+                "status": "submitted",
+                "gpt_description_prompt": "A high-energy dance hall track",
+                "prompt": "",
+                "type": "gen"
+              }
+            ]
+          }
+        }
+      },
+      "StemInfoArray200": {
+        "description": "Success — array of stem track objects",
+        "content": {
+          "application/json": {
+            "schema": {
+              "type": "array",
+              "items": {
+                "$ref": "#/components/schemas/StemInfo"
+              }
+            },
+            "example": [
+              {
+                "id": "stem-vocals-001",
+                "status": "complete",
+                "created_at": "2025-01-01T00:00:00.000Z",
+                "title": "Vocals",
+                "stem_from_id": "e76498dc-6ab4-4a10-a19f-8a095790e28d",
+                "duration": 198.44
+              },
+              {
+                "id": "stem-instrumental-001",
+                "status": "complete",
+                "created_at": "2025-01-01T00:00:00.000Z",
+                "title": "Instrumental",
+                "stem_from_id": "e76498dc-6ab4-4a10-a19f-8a095790e28d",
+                "duration": 198.44
+              }
+            ]
+          }
+        }
+      },
+      "Lyrics200": {
+        "description": "Success — generated lyrics",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/LyricsResponse"
+            },
+            "example": {
+              "text": "[Verse]\nStars above, shining bright\nWhisper dreams into the night",
+              "title": "Starlight Lullaby",
+              "status": "complete"
+            }
+          }
+        }
+      },
+      "AlignedLyrics200": {
+        "description": "Success — word-level lyric timestamps",
+        "content": {
+          "application/json": {
+            "schema": {
+              "type": "array",
+              "items": {
+                "$ref": "#/components/schemas/AlignedWord"
+              }
+            },
+            "example": [
+              {
+                "word": "hello",
+                "start_s": 1.23,
+                "end_s": 1.56,
+                "success": true,
+                "p_align": 0.95
+              },
+              {
+                "word": "world",
+                "start_s": 1.57,
+                "end_s": 1.89,
+                "success": true,
+                "p_align": 0.92
+              }
+            ]
+          }
+        }
+      },
+      "Limit200": {
+        "description": "Success — quota information.\n\nSource: `tests/get_limit-response.json`.",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/LimitResponse"
+            },
+            "example": {
+              "credits_left": 20,
+              "monthly_limit": 50,
+              "monthly_usage": 30
+            }
+          }
+        }
+      },
+      "Persona200": {
+        "description": "Success — persona information",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/PersonaResponse"
+            },
+            "example": {
+              "persona": {
+                "id": "persona_abc123",
+                "name": "Rock Vocalist",
+                "description": "A powerful rock vocal style",
+                "clip_count": 10,
+                "is_public": true,
+                "is_suno_persona": false,
+                "upvote_count": 42
+              },
+              "total_results": 10,
+              "current_page": 1,
+              "is_following": false
+            }
+          }
+        }
+      },
+      "BadRequest": {
+        "description": "Bad request — missing or invalid parameters",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ErrorResponse"
+            },
+            "example": {
+              "error": "Audio ID is required"
+            }
+          }
+        }
+      },
+      "PaymentRequired": {
+        "description": "Payment required — insufficient Suno credits",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ErrorResponse"
+            },
+            "example": {
+              "error": "Payment required"
+            }
+          }
+        }
+      },
+      "InternalError": {
+        "description": "Internal server error",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ErrorResponse"
+            },
+            "example": {
+              "error": "Internal server error"
+            }
+          }
+        }
+      },
+      "NetworkError": {
+        "description": "Network error — unable to reach Suno API",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ErrorResponse"
+            },
+            "example": {
+              "error": "Network error: Unable to connect to Suno API. Please check your internet connection and try again."
+            }
+          }
+        }
+      },
+      "AudioInfoGetArray200": {
+        "description": "Success — audio metadata after polling (complete response).\n\nSource: `tests/get-response.json`.",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/AudioInfoArray"
+            },
+            "example": [
+              {
+                "id": "91c6659f-19f6-4cbf-8e5e-5e6bf7a225ce",
+                "title": "Bend So Low",
+                "image_url": "https://cdn2.suno.ai/image_91c6659f-19f6-4cbf-8e5e-5e6bf7a225ce.jpeg",
+                "lyric": "[Verse 1]\nStep in the room, make space\nHeel to toe, nice pace\nWine slow, then spin fast\nEverybody want that last\nBend low, let it show\nCatch the groove and let it go\n[Pre-Chorus]\nHold tight, now release\nBody move, find the heat\nOne more step, don't stop\nFeel that pressure rise up\n[Chorus]\nBend so low, bend so low\nBend so low, let it go\nBend so low, bend so low\nMove that waist, steal the show\n(steal the show)\nBend so low, bend so low\nWhen you drop, everybody know\n[Verse 2]\nFresh fit, clean cut\nBassline shake, back up\nHands up, then dip down\nMake the whole place turn around\nSide to side, never bored\nWatch your name get called for sure\n[Pre-Chorus]\nHold tight, now release\nBody move, find the heat\nOne more step, don't stop\nFeel that pressure rise up\n[Chorus]\nBend so low, bend so low\nBend so low, let it go\nBend so low, bend so low\nMove that waist, steal the show\n(steal the show)\nBend so low, bend so low\nWhen you drop, everybody know\n[Bridge]\nTouch the floor, come back clean\nMake it slick, make it mean\nOne breath, then you break\nWhole place jumping when you shake\n[Chorus]\nBend so low, bend so low\nBend so low, let it go\nBend so low, bend so low\nMove that waist, steal the show\n(steal the show)\nBend so low, bend so low\nWhen you drop, everybody know",
+                "audio_url": "https://cdn1.suno.ai/91c6659f-19f6-4cbf-8e5e-5e6bf7a225ce.mp3",
+                "video_url": "",
+                "created_at": "2026-06-23T07:53:41.194Z",
+                "model_name": "chirp-auk",
+                "status": "complete",
+                "gpt_description_prompt": "A high-energy dance hall track",
+                "prompt": "[Verse 1]\nStep in the room, make space\nHeel to toe, nice pace\nWine slow, then spin fast\nEverybody want that last\nBend low, let it show\nCatch the groove and let it go\n\n[Pre-Chorus]\nHold tight, now release\nBody move, find the heat\nOne more step, don't stop\nFeel that pressure rise up\n\n[Chorus]\nBend so low, bend so low\nBend so low, let it go\nBend so low, bend so low\nMove that waist, steal the show\n(steal the show)\nBend so low, bend so low\nWhen you drop, everybody know\n\n[Verse 2]\nFresh fit, clean cut\nBassline shake, back up\nHands up, then dip down\nMake the whole place turn around\nSide to side, never bored\nWatch your name get called for sure\n\n[Pre-Chorus]\nHold tight, now release\nBody move, find the heat\nOne more step, don't stop\nFeel that pressure rise up\n\n[Chorus]\nBend so low, bend so low\nBend so low, let it go\nBend so low, bend so low\nMove that waist, steal the show\n(steal the show)\nBend so low, bend so low\nWhen you drop, everybody know\n\n[Bridge]\nTouch the floor, come back clean\nMake it slick, make it mean\nOne breath, then you break\nWhole place jumping when you shake\n\n[Chorus]\nBend so low, bend so low\nBend so low, let it go\nBend so low, bend so low\nMove that waist, steal the show\n(steal the show)\nBend so low, bend so low\nWhen you drop, everybody know",
+                "type": "gen",
+                "tags": "Dancehall with uptempo dembow bounce, skittering hi-hats, punchy kick-snare, and rubbery sub-bass; verse stays clipped and percussive, pre-chorus strips to drums and bass with rising chants, chorus lands with big crowd hooks and bright synth stabs. Lead vocal is gritty and close-mic with doubled hook lines, ad-lib throws, and gang vocals on the chant. Ear candy: reverse cymbal lifts, bass drops before the chorus, and little horn pops between phrases. Mix is loud, glossy, and hard-hitting.",
+                "duration": 170.84
+              },
+              {
+                "id": "2fb7ba36-3167-4038-ac2f-ae0c2b668a79",
+                "title": "Bend So Low",
+                "image_url": "https://cdn2.suno.ai/image_2fb7ba36-3167-4038-ac2f-ae0c2b668a79.jpeg",
+                "lyric": "[Verse 1]\nStep in the room, make space\nHeel to toe, nice pace\nWine slow, then spin fast\nEverybody want that last\nBend low, let it show\nCatch the groove and let it go\n[Pre-Chorus]\nHold tight, now release\nBody move, find the heat\nOne more step, don't stop\nFeel that pressure rise up\n[Chorus]\nBend so low, bend so low\nBend so low, let it go\nBend so low, bend so low\nMove that waist, steal the show\n(steal the show)\nBend so low, bend so low\nWhen you drop, everybody know\n[Verse 2]\nFresh fit, clean cut\nBassline shake, back up\nHands up, then dip down\nMake the whole place turn around\nSide to side, never bored\nWatch your name get called for sure\n[Pre-Chorus]\nHold tight, now release\nBody move, find the heat\nOne more step, don't stop\nFeel that pressure rise up\n[Chorus]\nBend so low, bend so low\nBend so low, let it go\nBend so low, bend so low\nMove that waist, steal the show\n(steal the show)\nBend so low, bend so low\nWhen you drop, everybody know\n[Bridge]\nTouch the floor, come back clean\nMake it slick, make it mean\nOne breath, then you break\nWhole place jumping when you shake\n[Chorus]\nBend so low, bend so low\nBend so low, let it go\nBend so low, bend so low\nMove that waist, steal the show\n(steal the show)\nBend so low, bend so low\nWhen you drop, everybody know",
+                "audio_url": "https://cdn1.suno.ai/2fb7ba36-3167-4038-ac2f-ae0c2b668a79.mp3",
+                "video_url": "",
+                "created_at": "2026-06-23T07:53:41.194Z",
+                "model_name": "chirp-auk",
+                "status": "complete",
+                "gpt_description_prompt": "A high-energy dance hall track",
+                "prompt": "[Verse 1]\nStep in the room, make space\nHeel to toe, nice pace\nWine slow, then spin fast\nEverybody want that last\nBend low, let it show\nCatch the groove and let it go\n\n[Pre-Chorus]\nHold tight, now release\nBody move, find the heat\nOne more step, don't stop\nFeel that pressure rise up\n\n[Chorus]\nBend so low, bend so low\nBend so low, let it go\nBend so low, bend so low\nMove that waist, steal the show\n(steal the show)\nBend so low, bend so low\nWhen you drop, everybody know\n\n[Verse 2]\nFresh fit, clean cut\nBassline shake, back up\nHands up, then dip down\nMake the whole place turn around\nSide to side, never bored\nWatch your name get called for sure\n\n[Pre-Chorus]\nHold tight, now release\nBody move, find the heat\nOne more step, don't stop\nFeel that pressure rise up\n\n[Chorus]\nBend so low, bend so low\nBend so low, let it go\nBend so low, bend so low\nMove that waist, steal the show\n(steal the show)\nBend so low, bend so low\nWhen you drop, everybody know\n\n[Bridge]\nTouch the floor, come back clean\nMake it slick, make it mean\nOne breath, then you break\nWhole place jumping when you shake\n\n[Chorus]\nBend so low, bend so low\nBend so low, let it go\nBend so low, bend so low\nMove that waist, steal the show\n(steal the show)\nBend so low, bend so low\nWhen you drop, everybody know",
+                "type": "gen",
+                "tags": "Dancehall with uptempo dembow bounce, skittering hi-hats, punchy kick-snare, and rubbery sub-bass; verse stays clipped and percussive, pre-chorus strips to drums and bass with rising chants, chorus lands with big crowd hooks and bright synth stabs. Lead vocal is gritty and close-mic with doubled hook lines, ad-lib throws, and gang vocals on the chant. Ear candy: reverse cymbal lifts, bass drops before the chorus, and little horn pops between phrases. Mix is loud, glossy, and hard-hitting.",
+                "duration": 172.92
+              }
+            ]
+          }
+        }
       }
     }
   }
