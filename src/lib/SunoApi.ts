@@ -7,7 +7,7 @@ import * as cookie from 'cookie';
 import { randomUUID } from 'node:crypto';
 import { Solver } from '@2captcha/captcha-solver';
 import { paramsCoordinates } from '@2captcha/captcha-solver/dist/structs/2captcha';
-import { BrowserContext, Page, Locator, chromium, firefox } from 'rebrowser-playwright-core';
+import { BrowserContext, Page, Locator, FrameLocator, chromium, firefox } from 'rebrowser-playwright-core';
 import { createCursor, Cursor } from 'ghost-cursor-playwright';
 import { promises as fs } from 'fs';
 import path from 'node:path';
@@ -78,7 +78,10 @@ class SunoApi {
   private deviceId?: string;
   private userAgent?: string;
   private cookies: Record<string, string | undefined>;
-  private solver = new Solver(process.env.TWOCAPTCHA_KEY + '');
+  private solver = new Solver(
+    process.env.TWOCAPTCHA_KEY + '',
+    Number(process.env.TWOCAPTCHA_POLLING_INTERVAL) || 8000
+  );
   private ghostCursorEnabled = yn(process.env.BROWSER_GHOST_CURSOR, { default: false });
   private cursor?: Cursor;
 
@@ -211,6 +214,115 @@ class SunoApi {
     return resp.data.required;
   }
 
+  private get2CaptchaEndpoints() {
+    const provider = process.env.TWOCAPTCHA_PROVIDER?.toLowerCase();
+    if (provider === 'rucaptcha') {
+      return {
+        in: 'https://rucaptcha.com/in.php',
+        res: 'https://rucaptcha.com/res.php'
+      };
+    }
+    return {
+      in: 'https://2captcha.com/in.php',
+      res: 'https://2captcha.com/res.php'
+    };
+  }
+
+  private isTransient2CaptchaError(err: unknown): boolean {
+    const message = err instanceof Error ? err.message : String(err);
+    const code = (err as { code?: string })?.code;
+    return /premature close|econnreset|etimedout|socket hang up|network|fetch failed|err_stream/i.test(message)
+      || ['ECONNRESET', 'ETIMEDOUT', 'EPIPE', 'ERR_STREAM_PREMATURE_CLOSE'].includes(code || '');
+  }
+
+  private parse2CaptchaCoordinates(request: unknown): Array<{ x: string | number; y: string | number }> {
+    if (Array.isArray(request))
+      return request;
+    if (typeof request === 'string') {
+      return request.split(';').filter(Boolean).map((pair) => {
+        const [x, y] = pair.split(',');
+        return { x, y };
+      });
+    }
+    throw new Error(`Unexpected 2Captcha coordinates format: ${JSON.stringify(request)}`);
+  }
+
+  private async solveCoordinates(payload: paramsCoordinates): Promise<{ data: Array<{ x: string | number; y: string | number }>; id: string }> {
+    const apiKey = process.env.TWOCAPTCHA_KEY || '';
+    const { in: inUrl, res: resUrl } = this.get2CaptchaEndpoints();
+    const pollingIntervalMs = Number(process.env.TWOCAPTCHA_POLLING_INTERVAL) || 8000;
+    const pollNetworkRetries = Number(process.env.TWOCAPTCHA_POLL_RETRIES) || 5;
+    const submitPayload = {
+      ...payload,
+      key: apiKey,
+      method: 'base64',
+      coordinatescaptcha: 1,
+      json: 1,
+      header_acao: 1,
+      soft_id: 4587
+    };
+
+    let taskId = '';
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      try {
+        const submitResp = await axios.post(inUrl, submitPayload, {
+          timeout: 60000,
+          headers: { 'Content-Type': 'application/json' }
+        });
+        const submitData = typeof submitResp.data === 'string' ? JSON.parse(submitResp.data) : submitResp.data;
+        if (submitData.status != 1)
+          throw new Error(String(submitData.request || submitData));
+        taskId = String(submitData.request);
+        break;
+      } catch (err) {
+        if (!this.isTransient2CaptchaError(err) || attempt === 3)
+          throw err;
+        logger.info(`2Captcha submit failed (${err instanceof Error ? err.message : err}), retry ${attempt}/3`);
+        await sleep(2);
+      }
+    }
+
+    const pollParams = {
+      key: apiKey,
+      action: 'get',
+      id: taskId,
+      json: 1,
+      header_acao: 1,
+      soft_id: 4587
+    };
+
+    while (true) {
+      await sleep(pollingIntervalMs / 1000);
+      for (let attempt = 1; attempt <= pollNetworkRetries; attempt++) {
+        try {
+          const pollResp = await axios.get(resUrl, {
+            params: pollParams,
+            timeout: 60000,
+            responseType: 'text',
+            transformResponse: [(data) => data]
+          });
+          const pollData = JSON.parse(pollResp.data);
+          if (pollData.status == 1) {
+            return {
+              id: taskId,
+              data: this.parse2CaptchaCoordinates(pollData.request)
+            };
+          }
+          if (pollData.request === 'CAPCHA_NOT_READY')
+            break;
+          throw new Error(String(pollData.request || pollData));
+        } catch (err) {
+          if (this.isTransient2CaptchaError(err) && attempt < pollNetworkRetries) {
+            logger.info(`2Captcha poll failed (${err instanceof Error ? err.message : err}), retry ${attempt}/${pollNetworkRetries}`);
+            await sleep(Math.min(attempt * 2, 10));
+            continue;
+          }
+          throw err;
+        }
+      }
+    }
+  }
+
   /**
    * Clicks on a locator or XY vector. This method is made because of the difference between ghost-cursor-playwright and Playwright methods
    */
@@ -253,25 +365,58 @@ class SunoApi {
     }
   }
 
+  /** Visible hCaptcha challenge iframe only — excludes hidden response/widget iframes. */
+  private hcaptchaChallengeIframeSelector =
+    'iframe[title*="hCaptcha challenge"]:not([aria-hidden="true"]), iframe[src*="frame=challenge"]:not([aria-hidden="true"])';
+
+  private isContextDestroyedError(err: unknown): boolean {
+    const message = err instanceof Error ? err.message : String(err);
+    return /execution context was destroyed|target closed|session closed|protocol error/i.test(message);
+  }
+
+  private async waitForPageStable(page: Page, timeout = 15000): Promise<void> {
+    await page.waitForLoadState('domcontentloaded', { timeout }).catch(() => undefined);
+    await page.waitForLoadState('load', { timeout }).catch(() => undefined);
+    await sleep(0.5);
+  }
+
+  private async waitForCreatePageReady(page: Page, timeout = 90000): Promise<void> {
+    const deadline = Date.now() + timeout;
+    while (Date.now() < deadline) {
+      try {
+        await this.waitForPageStable(page, 10000);
+        await this.assertCreatePageLoaded(page);
+        const ready = page.locator(
+          'textarea[placeholder*="Mellow folk metal"], textarea[placeholder*="song about"], .custom-textarea, button[aria-label="Create song"]'
+        ).first();
+        if (await ready.isVisible().catch(() => false))
+          return;
+      } catch (err) {
+        if (!this.isContextDestroyedError(err))
+          throw err;
+      }
+      await sleep(1);
+    }
+    throw new Error(`Suno create page did not become ready (${page.url()})`);
+  }
+
   private getHcaptchaFrame(page: Page) {
-    return page.frameLocator(
-      'iframe[title*="hCaptcha challenge"], iframe[src*="frame=challenge"], iframe[src*="hcaptcha-assets"], iframe[src*="hcaptcha"]'
-    );
+    return page.frameLocator(this.hcaptchaChallengeIframeSelector).first();
+  }
+
+  private getHcaptchaChallengeLocator(page: Page) {
+    return page.locator(this.hcaptchaChallengeIframeSelector).first();
   }
 
   private async isHcaptchaChallengeVisible(page: Page): Promise<boolean> {
-    const challengeIframe = page.locator(
-      'iframe[title*="hCaptcha challenge"], iframe[src*="frame=challenge"], iframe[src*="hcaptcha-assets"]'
-    );
-    if (await challengeIframe.count() > 0 && await challengeIframe.first().isVisible().catch(() => false)) {
+    const challengeIframe = this.getHcaptchaChallengeLocator(page);
+    if (await challengeIframe.isVisible().catch(() => false)) {
       return true;
     }
 
     const frame = this.getHcaptchaFrame(page);
-    const challenge = frame.locator('.challenge-container, .challenge-view, .task-grid');
-    if (await challenge.count() === 0)
-      return false;
-    return challenge.first().isVisible().catch(() => false);
+    const challenge = frame.locator('.challenge-container, .challenge-view, .task-grid').first();
+    return challenge.isVisible().catch(() => false);
   }
 
   private async waitForHcaptchaChallenge(page: Page, timeout = 120000): Promise<void> {
@@ -282,7 +427,9 @@ class SunoApi {
         return;
       }
       const hcaptchaFrame = page.frames().find((frame: { url: () => string }) =>
-        /hcaptcha|frame=challenge|captcha\/v1/i.test(frame.url())
+        /frame=challenge/i.test(frame.url())
+      ) ?? page.frames().find((frame: { url: () => string }) =>
+        /hcaptcha|captcha\/v1/i.test(frame.url())
       );
       if (hcaptchaFrame) {
         const hasChallenge = await hcaptchaFrame.locator('.challenge-container, .challenge-view, .task-grid').count().catch(() => 0);
@@ -301,14 +448,29 @@ class SunoApi {
   }
 
   private async prepareCreatePage(page: Page): Promise<void> {
-    const simpleTab = page.getByRole('tab', { name: /^simple$/i });
-    if (await simpleTab.count() > 0 && await simpleTab.isVisible().catch(() => false))
-      await simpleTab.click().catch(() => undefined);
-
-    for (const label of ['Close', 'Accept All', 'Accept all', 'Reject All']) {
+    for (let attempt = 1; attempt <= 3; attempt++) {
       try {
-        await page.getByRole('button', { name: label }).click({ timeout: 1500 });
-      } catch {}
+        await this.waitForPageStable(page);
+        await this.assertCreatePageLoaded(page);
+
+        for (const label of ['Close', 'Accept All', 'Accept all', 'Reject All']) {
+          const btn = page.getByRole('button', { name: label }).first();
+          if (await btn.isVisible().catch(() => false))
+            await btn.click({ timeout: 1500 }).catch(() => undefined);
+        }
+
+        const simpleTab = page.getByRole('tab', { name: /^simple$/i });
+        if (await simpleTab.isVisible().catch(() => false))
+          await simpleTab.click().catch(() => undefined);
+
+        await this.waitForPageStable(page);
+        return;
+      } catch (err) {
+        if (!this.isContextDestroyedError(err) || attempt === 3)
+          throw err;
+        logger.info(`prepareCreatePage interrupted by navigation, retry ${attempt}/3`);
+        await this.waitForCreatePageReady(page);
+      }
     }
   }
 
@@ -355,6 +517,75 @@ class SunoApi {
     }
   }
 
+  private async getChallengePrompt(
+    page: Page,
+    timeoutMs = 20000
+  ): Promise<{ text?: string; gone: boolean }> {
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+      if (!await this.isHcaptchaChallengeVisible(page))
+        return { gone: true };
+
+      const challenge = this.getHcaptchaFrame(page)
+        .locator('.challenge-container, .challenge-view, .task-grid')
+        .first();
+      const prompt = challenge.locator('.prompt-text, .challenge-prompt, [class*="prompt-text"]').first();
+      if (await prompt.isVisible().catch(() => false)) {
+        const text = await prompt.innerText({ timeout: 5000 }).catch(() => '');
+        if (text.trim())
+          return { text, gone: false };
+      }
+      await sleep(0.5);
+    }
+    if (!await this.isHcaptchaChallengeVisible(page))
+      return { gone: true };
+    return { gone: false };
+  }
+
+  private async submitHcaptchaChallenge(frame: FrameLocator, createButton: Locator): Promise<void> {
+    const submit = frame.locator('.button-submit, button[type="submit"], [aria-label="Verify"], [aria-label="Next"]').first();
+    if (!await submit.isVisible().catch(() => false)) {
+      logger.info('hCaptcha submit button not visible');
+      return;
+    }
+    try {
+      await this.click(submit);
+    } catch (e: any) {
+      if (e.message.includes('viewport'))
+        await this.click(createButton);
+      else
+        throw e;
+    }
+    await sleep(1.5);
+  }
+
+  private async waitForChallengeTransition(
+    page: Page,
+    signal: AbortSignal,
+    timeoutMs = 45000
+  ): Promise<'solved' | 'continue'> {
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+      if (signal.aborted)
+        throw new Error('AbortError');
+      if (!await this.isHcaptchaChallengeVisible(page))
+        return 'solved';
+
+      const frame = this.getHcaptchaFrame(page);
+      const prompt = frame.locator('.prompt-text, .challenge-prompt, [class*="prompt-text"]').first();
+      const loading = frame.locator('.loading, .spinner, [class*="loading-indicator"]').first();
+      const promptVisible = await prompt.isVisible().catch(() => false);
+      const loadingVisible = await loading.isVisible().catch(() => false);
+      if (promptVisible && !loadingVisible)
+        return 'continue';
+
+      await sleep(0.5);
+    }
+    if (!await this.isHcaptchaChallengeVisible(page))
+      return 'solved';
+    return 'continue';
+  }
+
   private buildBrowserCookies() {
     const lax: 'Lax' | 'Strict' | 'None' = 'Lax';
     const secure = true;
@@ -393,10 +624,16 @@ class SunoApi {
   private async waitForFirstVisible(page: Page, locators: Locator[], label: string, timeout = 60000): Promise<Locator> {
     const deadline = Date.now() + timeout;
     while (Date.now() < deadline) {
-      for (const locator of locators) {
-        const candidate = locator.first();
-        if (await candidate.count() > 0 && await candidate.isVisible().catch(() => false))
-          return candidate;
+      try {
+        await this.assertCreatePageLoaded(page);
+        for (const locator of locators) {
+          const candidate = locator.first();
+          if (await candidate.isVisible().catch(() => false))
+            return candidate;
+        }
+      } catch (err) {
+        if (!this.isContextDestroyedError(err))
+          throw err;
       }
       await sleep(0.5);
     }
@@ -487,17 +724,16 @@ class SunoApi {
     await page.goto('https://suno.com/create', { referer: 'https://www.google.com/', waitUntil: 'domcontentloaded', timeout: 60000 });
 
     logger.info('Waiting for Suno interface to load');
-    await this.assertCreatePageLoaded(page);
     await page.waitForResponse('**/api/project/**\\?**', { timeout: 60000 }).catch(() => {
       logger.info('Song list API not observed; continuing with UI selectors');
     });
-    await this.assertCreatePageLoaded(page);
+    await this.waitForCreatePageReady(page);
+
+    logger.info('Triggering the CAPTCHA');
+    await this.prepareCreatePage(page);
 
     if (this.ghostCursorEnabled)
       this.cursor = await createCursor(page);
-    
-    logger.info('Triggering the CAPTCHA');
-    await this.prepareCreatePage(page);
 
     let textarea: Locator;
     let button: Locator;
@@ -511,39 +747,57 @@ class SunoApi {
     }
 
     const controller = new AbortController();
-    const hcaptchaFrame = this.getHcaptchaFrame(page);
     new Promise<void>(async (resolve, reject) => {
-      const frame = hcaptchaFrame;
-      const challenge = frame.locator('.challenge-container, .challenge-view, .task-grid');
       try {
-        let wait = true;
-        while (true) {
-          if (wait)
-            await this.waitForHcaptchaReady(page, controller.signal);
-          const drag = (await challenge.locator('.prompt-text').first().innerText()).toLowerCase().includes('drag');
+        const maxRounds = 10;
+        for (let round = 1; round <= maxRounds; round++) {
+          if (controller.signal.aborted)
+            break;
+
+          await this.waitForHcaptchaReady(page, controller.signal);
+
+          if (!await this.isHcaptchaChallengeVisible(page)) {
+            logger.info('hCaptcha challenge closed, waiting for token');
+            break;
+          }
+
+          const promptInfo = await this.getChallengePrompt(page);
+          if (promptInfo.gone) {
+            logger.info('hCaptcha challenge closed before reading prompt');
+            break;
+          }
+          if (!promptInfo.text) {
+            logger.info(`hCaptcha round ${round}: prompt not ready, retrying`);
+            await sleep(2);
+            continue;
+          }
+
+          const drag = promptInfo.text.toLowerCase().includes('drag');
+          const frame = this.getHcaptchaFrame(page);
+          const challenge = frame.locator('.challenge-container, .challenge-view, .task-grid').first();
           let captcha: any;
-          for (let j = 0; j < 3; j++) { // try several times because sometimes 2Captcha could return an error
+          for (let j = 0; j < 3; j++) {
             try {
-              logger.info('Sending the CAPTCHA to 2Captcha');
+              logger.info(`Sending the CAPTCHA to 2Captcha (round ${round})`);
               const payload: paramsCoordinates = {
                 body: (await challenge.screenshot({ timeout: 5000 })).toString('base64'),
-                lang: process.env.BROWSER_LOCALE
+                lang: process.env.BROWSER_LOCALE,
+                textinstructions: promptInfo.text
               };
               if (drag) {
-                // Say to the worker that he needs to click
                 payload.textinstructions = 'CLICK on the shapes at their edge or center as shown above—please be precise!';
                 payload.imginstructions = (await fs.readFile(path.join(process.cwd(), 'public', 'drag-instructions.jpg'))).toString('base64');
               }
-              captcha = await this.solver.coordinates(payload);
+              captcha = await this.solveCoordinates(payload);
               break;
-            } catch(err: any) {
+            } catch (err: any) {
               logger.info(err.message);
               if (j != 2)
                 logger.info('Retrying...');
               else
                 throw err;
             }
-          } 
+          }
           if (drag) {
             const challengeBox = await challenge.boundingBox();
             if (challengeBox == null)
@@ -551,36 +805,41 @@ class SunoApi {
             if (captcha.data.length % 2) {
               logger.info('Solution does not have even amount of points required for dragging. Requesting new solution...');
               this.solver.badReport(captcha.id);
-              wait = false;
               continue;
             }
             for (let i = 0; i < captcha.data.length; i += 2) {
               const data1 = captcha.data[i];
-              const data2 = captcha.data[i+1];
+              const data2 = captcha.data[i + 1];
               logger.info(JSON.stringify(data1) + JSON.stringify(data2));
               await page.mouse.move(challengeBox.x + +data1.x, challengeBox.y + +data1.y);
               await page.mouse.down();
-              await sleep(1.1); // wait for the piece to be 'unlocked'
+              await sleep(1.1);
               await page.mouse.move(challengeBox.x + +data2.x, challengeBox.y + +data2.y, { steps: 30 });
               await page.mouse.up();
             }
-            wait = true;
           } else {
             for (const data of captcha.data) {
               logger.info(data);
               await this.click(challenge, { x: +data.x, y: +data.y });
-            };
+              await sleep(0.3);
+            }
           }
-          this.click(frame.locator('.button-submit')).catch(e => {
-            if (e.message.includes('viewport')) // when hCaptcha window has been closed due to inactivity,
-              this.click(button); // click the Create button again to trigger the CAPTCHA
-            else
-              throw e;
-          });
+
+          await this.submitHcaptchaChallenge(frame, button);
+          const outcome = await this.waitForChallengeTransition(page, controller.signal);
+          if (outcome === 'solved') {
+            logger.info('hCaptcha challenge completed');
+            break;
+          }
+          logger.info(`hCaptcha round ${round} finished, loading next challenge`);
         }
-      } catch(e: any) {
-        if (e.message.includes('been closed') // catch error when closing the browser
-          || e.message == 'AbortError') // catch error when waitForRequests is aborted
+        if (!controller.signal.aborted && await this.isHcaptchaChallengeVisible(page).catch(() => false)) {
+          throw new Error(`hCaptcha failed after ${maxRounds} rounds`);
+        }
+        resolve();
+      } catch (e: any) {
+        if (e.message.includes('been closed')
+          || e.message == 'AbortError')
           resolve();
         else
           reject(e);
